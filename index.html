@@ -136,20 +136,27 @@
     </div>
 </div>
 
+<!-- ================================================================ -->
+<!-- 使用 MongoDB 官方浏览器驱动（通过 CDN 加载） -->
+<!-- 版本: 4.17.0，这个版本支持浏览器端使用 -->
+<!-- ================================================================ -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mongodb/4.17.0/mongodb.umd.min.js">
+</script>
+
 <script>
     // ================================================================
-    // ⚠️ 第一步：注册 JSONBin 并获取 API 密钥
-    //    1. 访问 https://jsonbin.io 注册账号
-    //    2. 创建 Bin（点击 "Create Bin"）
-    //    3. 在右上角 Settings → API Keys 创建密钥
-    //    4. 把 binId 和 apiKey 填到下面
+    // ⚠️ 请把下面这行替换成您的 MongoDB 连接字符串
+    //   在 MongoDB Atlas → Connect → Connect your application 中复制
     // ================================================================
-    const BIN_ID = "6a647e6ff5f4af5e29bef92e";        // 例如: 6543abc123456789
-    const API_KEY = "$2a$10$TJ5PG05T354KzCzcgfarcOFd9ZI8FXG4s7qgA.nMMp1XidRjsYWjG";     // 例如: $2a$10$xxxxx
+    const CONNECTION_STRING = "mongodb+srv://fengccn1fc_db_user:<db_password>@cluster0.tfkfyrl.mongodb.net/?appName=Cluster0";
+
+
     // ================================================================
     const ADMIN_PASSWORD = "admin123";
 
     console.log('🚀 页面启动...');
+    console.log('📡 连接字符串前缀:', CONNECTION_STRING.substring(0, 30) + '...');
+
     const statusText = document.getElementById('statusText');
     const statusDot = document.getElementById('statusDot');
 
@@ -177,6 +184,8 @@
     let data = [];
     let page = 1;
     const pageSize = 5;
+    let client = null;
+    let MongoClient = null;
 
     // 主题切换
     function setTheme(t) {
@@ -191,81 +200,135 @@
     themeToggle.onclick = () => setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 
     // ================================================================
-    // JSONBin API 操作
+    // 等待 MongoDB 驱动加载
     // ================================================================
 
-    // 读取数据
+    function waitForDriver() {
+        return new Promise((resolve, reject) => {
+            let attempts = 0;
+            const maxAttempts = 50;
+            
+            // 检查是否已经加载
+            if (window.mongodb && window.mongodb.MongoClient) {
+                console.log('✅ MongoDB 驱动已就绪');
+                resolve(window.mongodb.MongoClient);
+                return;
+            }
+
+            // 检查是否有其他加载方式
+            if (typeof MongoClient !== 'undefined') {
+                console.log('✅ MongoDB 驱动已就绪 (MongoClient)');
+                resolve(MongoClient);
+                return;
+            }
+
+            const timer = setInterval(() => {
+                attempts++;
+                if (window.mongodb && window.mongodb.MongoClient) {
+                    clearInterval(timer);
+                    console.log('✅ MongoDB 驱动已就绪 (window.mongodb)');
+                    resolve(window.mongodb.MongoClient);
+                    return;
+                }
+                if (typeof MongoClient !== 'undefined') {
+                    clearInterval(timer);
+                    console.log('✅ MongoDB 驱动已就绪 (MongoClient 全局)');
+                    resolve(MongoClient);
+                    return;
+                }
+                if (attempts >= maxAttempts) {
+                    clearInterval(timer);
+                    reject(new Error('MongoDB 驱动加载超时，请刷新页面重试'));
+                }
+            }, 200);
+        });
+    }
+
+    // ================================================================
+    // 数据库操作
+    // ================================================================
+
+    async function getCollection() {
+        if (!client) {
+            statusText.textContent = '🔌 正在连接数据库...';
+            statusDot.className = 'status-dot loading';
+            try {
+                // 获取驱动
+                MongoClient = await waitForDriver();
+                
+                // 创建客户端
+                client = new MongoClient(CONNECTION_STRING);
+                await client.connect();
+                console.log('✅ 数据库连接成功！');
+                statusText.textContent = '✅ 数据库已连接';
+                statusDot.className = 'status-dot success';
+            } catch (e) {
+                console.error('❌ 数据库连接失败:', e);
+                statusText.textContent = '❌ 连接失败: ' + e.message;
+                statusDot.className = 'status-dot error';
+                alert('⚠️ 数据库连接失败！\n\n请检查:\n1. 连接字符串中的用户名和密码是否正确\n2. MongoDB Atlas 的 IP 白名单是否允许所有IP (0.0.0.0/0)\n3. 网络连接是否正常\n\n错误信息: ' + e.message);
+                throw e;
+            }
+        }
+        const db = client.db('registration_db');
+        return db.collection('registrations');
+    }
+
     async function loadData() {
         try {
             statusText.textContent = '📥 正在加载数据...';
             statusDot.className = 'status-dot loading';
+
+            const collection = await getCollection();
+            const docs = await collection.find().sort({ time: -1 }).toArray();
             
-            const response = await fetch(`https://api.jsonbin.io/v3/b/${BIN_ID}/latest`, {
-                headers: {
-                    'X-Master-Key': API_KEY
-                }
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-            
-            const result = await response.json();
-            data = result.record || [];
-            
-            // 按时间排序（最新的在前）
-            data.sort((a, b) => (b.time || '').localeCompare(a.time || ''));
-            
+            data = docs.map(d => ({
+                id: d._id.toString(),
+                name: d.name || '',
+                organization: d.organization || '',
+                email: d.email || '',
+                phone: d.phone || '',
+                attendees: d.attendees || 1,
+                time: d.time || ''
+            }));
+
             renderTable();
             statusText.textContent = `✅ 已加载 ${data.length} 条数据`;
             statusDot.className = 'status-dot success';
             console.log(`✅ 加载 ${data.length} 条数据`);
         } catch (e) {
             console.error('❌ 加载失败:', e);
-            // 如果 Bin 是空的，初始化空数组
-            if (e.message.includes('404')) {
-                data = [];
-                await saveData();
-                renderTable();
-                statusText.textContent = '✅ 已初始化空数据库';
-                statusDot.className = 'status-dot success';
-                return;
-            }
-            statusText.textContent = '❌ 加载失败，请检查 API 密钥和 Bin ID';
+            statusText.textContent = '❌ 加载失败: ' + e.message;
             statusDot.className = 'status-dot error';
-            alert('⚠️ 加载数据失败！请检查:\n1. BIN_ID 是否正确\n2. API_KEY 是否正确\n3. 网络连接是否正常');
+            data = [];
+            renderTable();
         }
     }
 
-    // 保存数据（覆盖写入）
-    async function saveData() {
+    async function saveRegistration(entry) {
         try {
-            const response = await fetch(`https://api.jsonbin.io/v3/b/${BIN_ID}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Master-Key': API_KEY
-                },
-                body: JSON.stringify(data)
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-            
-            console.log('✅ 数据保存成功');
+            const collection = await getCollection();
+            const result = await collection.insertOne(entry);
+            console.log('✅ 保存成功，ID:', result.insertedId);
             return true;
         } catch (e) {
             console.error('❌ 保存失败:', e);
-            alert('⚠️ 保存数据失败，请检查网络连接');
+            alert('⚠️ 保存数据失败: ' + e.message);
             return false;
         }
     }
 
-    // 清空数据
-    async function clearData() {
-        data = [];
-        await saveData();
+    async function clearAllData() {
+        try {
+            const collection = await getCollection();
+            await collection.deleteMany({});
+            console.log('✅ 清空成功');
+            return true;
+        } catch (e) {
+            console.error('❌ 清空失败:', e);
+            alert('⚠️ 清空数据失败: ' + e.message);
+            return false;
+        }
     }
 
     function renderTable() {
@@ -327,15 +390,18 @@
                 attendees,
                 time: new Date().toLocaleString('zh-CN')
             };
-            data.push(newEntry);
-            await saveData();
-            showMsg('✅ 报名成功！感谢参与', 'success');
-            form.reset();
-            document.getElementById('attendees').value = 1;
-            renderTable();
+            const success = await saveRegistration(newEntry);
+            if (success) {
+                showMsg('✅ 报名成功！感谢参与', 'success');
+                form.reset();
+                document.getElementById('attendees').value = 1;
+                await loadData();
+            } else {
+                showMsg('❌ 报名失败，请重试', 'error');
+            }
         } catch (e) {
             console.error('❌ 提交失败:', e);
-            showMsg('❌ 报名失败，请检查网络后重试', 'error');
+            showMsg('❌ 报名失败: ' + e.message, 'error');
         }
         submitBtn.disabled = false;
         submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> 立即报名';
@@ -365,12 +431,10 @@
             } else if (action === 'reset') {
                 if (data.length === 0) { alert('数据已空'); return; }
                 if (confirm('⚠️ 确定清空所有数据？此操作不可恢复！')) {
-                    try {
-                        await clearData();
-                        renderTable();
+                    const success = await clearAllData();
+                    if (success) {
+                        await loadData();
                         alert('✅ 已清空所有数据');
-                    } catch (e) {
-                        alert('❌ 清空失败: ' + e.message);
                     }
                 }
             }
@@ -414,9 +478,24 @@
     // ================================================================
     statusText.textContent = '⏳ 正在初始化...';
     statusDot.className = 'status-dot loading';
-    loadData().then(() => {
-        console.log('✅ 页面加载完成');
-    });
+
+    if (CONNECTION_STRING.includes("你的用户名") || CONNECTION_STRING.includes("你的密码")) {
+        statusText.textContent = '⚠️ 请先配置连接字符串';
+        statusDot.className = 'status-dot error';
+        alert('⚠️ 请先配置连接字符串！\n\n在 MongoDB Atlas → Connect → Connect your application 中复制您的连接字符串，然后替换代码中的 CONNECTION_STRING 变量。');
+    } else {
+        waitForDriver()
+            .then(() => {
+                console.log('✅ 驱动已就绪，开始加载数据...');
+                loadData();
+            })
+            .catch(e => {
+                console.error('❌ 驱动加载失败:', e);
+                statusText.textContent = '❌ 驱动加载失败: ' + e.message;
+                statusDot.className = 'status-dot error';
+                alert('⚠️ MongoDB 驱动加载失败！\n\n请刷新页面重试。\n如果持续失败，可能是 CDN 网络问题。');
+            });
+    }
 </script>
 </body>
 </html>
