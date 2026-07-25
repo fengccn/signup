@@ -136,45 +136,22 @@
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- ✅ 使用官方 MongoDB Stitch Browser SDK (专为浏览器设计) -->
-<!-- ================================================================ -->
-<script src="https://s3.amazonaws.com/stitch-sdks/js/bundles/4.6.0/stitch.js">
-</script>
-
 <script>
     // ================================================================
-    // ⚠️ 修改这里：把你的用户名和密码填进去
+    // ⚠️ 第一步：注册 JSONBin 并获取 API 密钥
+    //    1. 访问 https://jsonbin.io 注册账号
+    //    2. 创建 Bin（点击 "Create Bin"）
+    //    3. 在右上角 Settings → API Keys 创建密钥
+    //    4. 把 binId 和 apiKey 填到下面
     // ================================================================
-    const CONNECTION_STRING = "mongodb+srv://fengccn1fc_db_user:zzb@2001@cluster0.mongodb.net/?retryWrites=true&w=majority";
+    const BIN_ID = "你的 Bin ID";        // 例如: 6543abc123456789
+    const API_KEY = "你的 API 密钥";     // 例如: $2a$10$xxxxx
+    // ================================================================
     const ADMIN_PASSWORD = "admin123";
-    // ================================================================
 
     console.log('🚀 页面启动...');
     const statusText = document.getElementById('statusText');
     const statusDot = document.getElementById('statusDot');
-
-    // 检查 Stitch 是否加载成功
-    function checkStitch() {
-        return new Promise((resolve, reject) => {
-            let attempts = 0;
-            const maxAttempts = 30;
-            const check = () => {
-                attempts++;
-                if (window.Stitch) {
-                    console.log('✅ Stitch SDK 加载成功');
-                    resolve(window.Stitch);
-                    return;
-                }
-                if (attempts >= maxAttempts) {
-                    reject(new Error('Stitch SDK 加载超时'));
-                    return;
-                }
-                setTimeout(check, 200);
-            };
-            check();
-        });
-    }
 
     // DOM 引用
     const form = document.getElementById('registrationForm');
@@ -200,8 +177,6 @@
     let data = [];
     let page = 1;
     const pageSize = 5;
-    let stitchClient = null;
-    let db = null;
 
     // 主题切换
     function setTheme(t) {
@@ -216,75 +191,81 @@
     themeToggle.onclick = () => setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 
     // ================================================================
-    // 核心：使用 Stitch 连接 MongoDB Atlas
+    // JSONBin API 操作
     // ================================================================
-    async function initStitch() {
-        statusText.textContent = '⏳ 正在加载 Stitch SDK...';
-        statusDot.className = 'status-dot loading';
-        
-        try {
-            await checkStitch();
-            
-            // 创建 Stitch 客户端
-            const appId = CONNECTION_STRING.split('/')[2].split('.')[0];
-            const client = Stitch.initializeDefaultAppClient(appId);
-            
-            // 匿名登录
-            await client.auth.loginWithCredential(new Stitch.AnonymousCredential());
-            console.log('✅ Stitch 认证成功');
-            
-            // 获取数据库引用
-            const mongodb = client.getServiceClient(Stitch.RemoteMongoClient.factory, 'mongodb-atlas');
-            const dbName = 'registration_db';
-            const collectionName = 'registrations';
-            
-            statusText.textContent = '✅ 数据库已连接';
-            statusDot.className = 'status-dot success';
-            
-            return { client, mongodb, dbName, collectionName };
-        } catch (e) {
-            console.error('❌ Stitch 初始化失败:', e);
-            statusText.textContent = '❌ 连接失败，请检查网络';
-            statusDot.className = 'status-dot error';
-            throw e;
-        }
-    }
 
-    let stitchDb = null;
-
-    async function getCollection() {
-        if (!stitchDb) {
-            const result = await initStitch();
-            stitchDb = result.mongodb.db(result.dbName).collection(result.collectionName);
-        }
-        return stitchDb;
-    }
-
-    // 加载数据
+    // 读取数据
     async function loadData() {
         try {
             statusText.textContent = '📥 正在加载数据...';
-            const collection = await getCollection();
-            const docs = await collection.find({}, { sort: { time: -1 } }).toArray();
-            data = docs.map(d => ({
-                id: d._id.toString(),
-                name: d.name || '',
-                organization: d.organization || '',
-                email: d.email || '',
-                phone: d.phone || '',
-                attendees: d.attendees || 1,
-                time: d.time || ''
-            }));
+            statusDot.className = 'status-dot loading';
+            
+            const response = await fetch(`https://api.jsonbin.io/v3/b/${BIN_ID}/latest`, {
+                headers: {
+                    'X-Master-Key': API_KEY
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const result = await response.json();
+            data = result.record || [];
+            
+            // 按时间排序（最新的在前）
+            data.sort((a, b) => (b.time || '').localeCompare(a.time || ''));
+            
             renderTable();
             statusText.textContent = `✅ 已加载 ${data.length} 条数据`;
             statusDot.className = 'status-dot success';
             console.log(`✅ 加载 ${data.length} 条数据`);
         } catch (e) {
             console.error('❌ 加载失败:', e);
-            statusText.textContent = '❌ 加载失败: ' + e.message;
+            // 如果 Bin 是空的，初始化空数组
+            if (e.message.includes('404')) {
+                data = [];
+                await saveData();
+                renderTable();
+                statusText.textContent = '✅ 已初始化空数据库';
+                statusDot.className = 'status-dot success';
+                return;
+            }
+            statusText.textContent = '❌ 加载失败，请检查 API 密钥和 Bin ID';
             statusDot.className = 'status-dot error';
-            alert('⚠️ 加载数据失败！请检查:\n1. 连接字符串是否正确\n2. MongoDB Atlas 的 IP 白名单是否允许所有IP (0.0.0.0/0)\n3. 网络连接是否正常');
+            alert('⚠️ 加载数据失败！请检查:\n1. BIN_ID 是否正确\n2. API_KEY 是否正确\n3. 网络连接是否正常');
         }
+    }
+
+    // 保存数据（覆盖写入）
+    async function saveData() {
+        try {
+            const response = await fetch(`https://api.jsonbin.io/v3/b/${BIN_ID}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Master-Key': API_KEY
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            console.log('✅ 数据保存成功');
+            return true;
+        } catch (e) {
+            console.error('❌ 保存失败:', e);
+            alert('⚠️ 保存数据失败，请检查网络连接');
+            return false;
+        }
+    }
+
+    // 清空数据
+    async function clearData() {
+        data = [];
+        await saveData();
     }
 
     function renderTable() {
@@ -301,12 +282,12 @@
             adminBody.innerHTML = pageData.map((r, i) => `
                 <tr>
                     <td>${start + i + 1}</td>
-                    <td><strong>${r.name}</strong></td>
-                    <td>${r.organization}</td>
-                    <td>${r.email}</td>
-                    <td>${r.phone}</td>
-                    <td>${r.attendees}</td>
-                    <td>${r.time}</td>
+                    <td><strong>${r.name || ''}</strong></td>
+                    <td>${r.organization || ''}</td>
+                    <td>${r.email || ''}</td>
+                    <td>${r.phone || ''}</td>
+                    <td>${r.attendees || 1}</td>
+                    <td>${r.time || ''}</td>
                 </tr>
             `).join('');
         }
@@ -338,19 +319,20 @@
         submitBtn.innerHTML = '<span class="loading-spinner"></span> 提交中...';
 
         try {
-            const collection = await getCollection();
-            await collection.insertOne({
+            const newEntry = {
                 name,
                 organization: org,
                 email,
                 phone,
                 attendees,
                 time: new Date().toLocaleString('zh-CN')
-            });
+            };
+            data.push(newEntry);
+            await saveData();
             showMsg('✅ 报名成功！感谢参与', 'success');
             form.reset();
             document.getElementById('attendees').value = 1;
-            await loadData();
+            renderTable();
         } catch (e) {
             console.error('❌ 提交失败:', e);
             showMsg('❌ 报名失败，请检查网络后重试', 'error');
@@ -382,11 +364,10 @@
                 await loadData();
             } else if (action === 'reset') {
                 if (data.length === 0) { alert('数据已空'); return; }
-                if (confirm('⚠️ 确定清空所有数据？')) {
+                if (confirm('⚠️ 确定清空所有数据？此操作不可恢复！')) {
                     try {
-                        const collection = await getCollection();
-                        await collection.deleteMany({});
-                        await loadData();
+                        await clearData();
+                        renderTable();
                         alert('✅ 已清空所有数据');
                     } catch (e) {
                         alert('❌ 清空失败: ' + e.message);
@@ -433,22 +414,9 @@
     // ================================================================
     statusText.textContent = '⏳ 正在初始化...';
     statusDot.className = 'status-dot loading';
-    
-    // 先确保 Stitch 加载完成
-    checkStitch()
-        .then(() => {
-            console.log('✅ Stitch 就绪，初始化数据...');
-            return loadData();
-        })
-        .then(() => {
-            console.log('✅ 页面完全加载完成');
-        })
-        .catch(e => {
-            console.error('❌ 初始化失败:', e);
-            statusText.textContent = '❌ 初始化失败，请刷新重试';
-            statusDot.className = 'status-dot error';
-            alert('⚠️ 初始化失败！请刷新页面重试。\n如果持续失败，请检查网络连接。');
-        });
+    loadData().then(() => {
+        console.log('✅ 页面加载完成');
+    });
 </script>
 </body>
 </html>
