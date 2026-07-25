@@ -636,8 +636,15 @@
         function loadData() {
             try {
                 const stored = localStorage.getItem('registrations');
-                if (stored) registrations = JSON.parse(stored);
-            } catch (_) { registrations = []; }
+                if (stored) {
+                    registrations = JSON.parse(stored);
+                } else {
+                    // 首次使用：初始为空数组，不添加任何演示数据
+                    registrations = [];
+                }
+            } catch (_) {
+                registrations = [];
+            }
         }
 
         function saveData() {
@@ -837,20 +844,9 @@
             openPasswordModal('reset');
         });
 
-        // --- 加载 & 演示数据 ---
+        // --- 加载数据 ---
         loadData();
-        if (registrations.length === 0) {
-            const demo = [
-                { name: '王小明', organization: '云创科技', phone: '13912345678', attendees: 2, time: new Date().toLocaleString('zh-CN') },
-                { name: '李丽', organization: '数字研究院', phone: '13798765432', attendees: 1, time: new Date().toLocaleString('zh-CN') },
-                { name: '张伟', organization: '智慧城市中心', phone: '13600001111', attendees: 3, time: new Date().toLocaleString('zh-CN') },
-                { name: '陈芳', organization: '创新实验室', phone: '13555556666', attendees: 4, time: new Date().toLocaleString('zh-CN') },
-                { name: '赵岩', organization: '未来科技', phone: '13888889999', attendees: 2, time: new Date().toLocaleString('zh-CN') },
-            ];
-            registrations = demo;
-            saveData();
-        }
-
+        // 不再自动填充演示数据，保持 localStorage 中的真实状态
         renderAdminTable();
         // 默认后台隐藏
         adminPanel.classList.remove('visible');
