@@ -83,10 +83,9 @@
         </div>
     </header>
 
-    <!-- 状态栏 -->
     <div class="status-bar" id="statusBar">
         <span class="status-dot loading" id="statusDot"></span>
-        <span id="statusText">⏳ 正在加载 MongoDB 驱动...</span>
+        <span id="statusText">⏳ 正在初始化...</span>
     </div>
 
     <section class="card">
@@ -138,64 +137,9 @@
 </div>
 
 <!-- ================================================================ -->
-<!-- ✅ 使用多个 CDN 备选，提高加载成功率 -->
+<!-- ✅ 使用官方 MongoDB Stitch Browser SDK (专为浏览器设计) -->
 <!-- ================================================================ -->
-<script>
-    // 先尝试 cdnjs，如果失败则尝试 unpkg
-    (function loadDriver() {
-        console.log('📦 开始加载 MongoDB 驱动...');
-        const statusText = document.getElementById('statusText');
-        const statusDot = document.getElementById('statusDot');
-        
-        // 尝试加载驱动
-        function tryLoad(url) {
-            return new Promise((resolve, reject) => {
-                const script = document.createElement('script');
-                script.src = url;
-                script.onload = () => {
-                    console.log('✅ 驱动加载成功:', url);
-                    resolve();
-                };
-                script.onerror = () => {
-                    console.log('❌ 驱动加载失败:', url);
-                    reject();
-                };
-                document.head.appendChild(script);
-            });
-        }
-
-        // 按顺序尝试
-        const cdnUrls = [
-            'https://cdnjs.cloudflare.com/ajax/libs/mongodb/5.9.2/mongodb.umd.min.js',
-            'https://unpkg.com/mongodb@5.9.2/dist/mongodb.umd.js',
-            'https://cdn.jsdelivr.net/npm/mongodb@5.9.2/dist/mongodb.umd.min.js'
-        ];
-
-        let currentIndex = 0;
-
-        function tryNext() {
-            if (currentIndex >= cdnUrls.length) {
-                statusText.textContent = '❌ 所有 CDN 加载失败，请刷新页面重试';
-                statusDot.className = 'status-dot error';
-                alert('⚠️ MongoDB 驱动加载失败！\n请检查网络连接后刷新页面。');
-                return;
-            }
-            statusText.textContent = `⏳ 正在加载驱动 (${currentIndex + 1}/${cdnUrls.length})...`;
-            tryLoad(cdnUrls[currentIndex])
-                .then(() => {
-                    statusText.textContent = '✅ 驱动加载成功，正在连接数据库...';
-                    statusDot.className = 'status-dot success';
-                    // 驱动加载完成后，执行主程序
-                    startApp();
-                })
-                .catch(() => {
-                    currentIndex++;
-                    tryNext();
-                });
-        }
-
-        tryNext();
-    })();
+<script src="https://s3.amazonaws.com/stitch-sdks/js/bundles/4.6.0/stitch.js">
 </script>
 
 <script>
@@ -206,11 +150,31 @@
     const ADMIN_PASSWORD = "admin123";
     // ================================================================
 
-    let MongoClient = null;
-    let client = null;
-    let data = [];
-    let page = 1;
-    const pageSize = 5;
+    console.log('🚀 页面启动...');
+    const statusText = document.getElementById('statusText');
+    const statusDot = document.getElementById('statusDot');
+
+    // 检查 Stitch 是否加载成功
+    function checkStitch() {
+        return new Promise((resolve, reject) => {
+            let attempts = 0;
+            const maxAttempts = 30;
+            const check = () => {
+                attempts++;
+                if (window.Stitch) {
+                    console.log('✅ Stitch SDK 加载成功');
+                    resolve(window.Stitch);
+                    return;
+                }
+                if (attempts >= maxAttempts) {
+                    reject(new Error('Stitch SDK 加载超时'));
+                    return;
+                }
+                setTimeout(check, 200);
+            };
+            check();
+        });
+    }
 
     // DOM 引用
     const form = document.getElementById('registrationForm');
@@ -232,221 +196,259 @@
     const modalConfirm = document.getElementById('modalConfirmBtn');
     const modalCancel = document.getElementById('modalCancelBtn');
     const modalError = document.getElementById('modalError');
-    const statusText = document.getElementById('statusText');
-    const statusDot = document.getElementById('statusDot');
 
-    function startApp() {
-        console.log('🚀 启动主程序...');
+    let data = [];
+    let page = 1;
+    const pageSize = 5;
+    let stitchClient = null;
+    let db = null;
+
+    // 主题切换
+    function setTheme(t) {
+        document.documentElement.setAttribute('data-theme', t);
+        localStorage.setItem('theme', t);
+        const dark = t === 'dark';
+        themeLabel.textContent = dark ? '亮白' : '暗黑';
+        themeToggle.querySelector('i').className = dark ? 'fas fa-sun' : 'fas fa-moon';
+    }
+    const savedTheme = localStorage.getItem('theme');
+    setTheme(savedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+    themeToggle.onclick = () => setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+
+    // ================================================================
+    // 核心：使用 Stitch 连接 MongoDB Atlas
+    // ================================================================
+    async function initStitch() {
+        statusText.textContent = '⏳ 正在加载 Stitch SDK...';
+        statusDot.className = 'status-dot loading';
         
-        // 检查 MongoClient 是否可用
-        if (!window.mongodb || !window.mongodb.MongoClient) {
-            console.error('❌ MongoClient 不可用');
-            statusText.textContent = '❌ 驱动加载失败，请刷新重试';
+        try {
+            await checkStitch();
+            
+            // 创建 Stitch 客户端
+            const appId = CONNECTION_STRING.split('/')[2].split('.')[0];
+            const client = Stitch.initializeDefaultAppClient(appId);
+            
+            // 匿名登录
+            await client.auth.loginWithCredential(new Stitch.AnonymousCredential());
+            console.log('✅ Stitch 认证成功');
+            
+            // 获取数据库引用
+            const mongodb = client.getServiceClient(Stitch.RemoteMongoClient.factory, 'mongodb-atlas');
+            const dbName = 'registration_db';
+            const collectionName = 'registrations';
+            
+            statusText.textContent = '✅ 数据库已连接';
+            statusDot.className = 'status-dot success';
+            
+            return { client, mongodb, dbName, collectionName };
+        } catch (e) {
+            console.error('❌ Stitch 初始化失败:', e);
+            statusText.textContent = '❌ 连接失败，请检查网络';
             statusDot.className = 'status-dot error';
+            throw e;
+        }
+    }
+
+    let stitchDb = null;
+
+    async function getCollection() {
+        if (!stitchDb) {
+            const result = await initStitch();
+            stitchDb = result.mongodb.db(result.dbName).collection(result.collectionName);
+        }
+        return stitchDb;
+    }
+
+    // 加载数据
+    async function loadData() {
+        try {
+            statusText.textContent = '📥 正在加载数据...';
+            const collection = await getCollection();
+            const docs = await collection.find({}, { sort: { time: -1 } }).toArray();
+            data = docs.map(d => ({
+                id: d._id.toString(),
+                name: d.name || '',
+                organization: d.organization || '',
+                email: d.email || '',
+                phone: d.phone || '',
+                attendees: d.attendees || 1,
+                time: d.time || ''
+            }));
+            renderTable();
+            statusText.textContent = `✅ 已加载 ${data.length} 条数据`;
+            statusDot.className = 'status-dot success';
+            console.log(`✅ 加载 ${data.length} 条数据`);
+        } catch (e) {
+            console.error('❌ 加载失败:', e);
+            statusText.textContent = '❌ 加载失败: ' + e.message;
+            statusDot.className = 'status-dot error';
+            alert('⚠️ 加载数据失败！请检查:\n1. 连接字符串是否正确\n2. MongoDB Atlas 的 IP 白名单是否允许所有IP (0.0.0.0/0)\n3. 网络连接是否正常');
+        }
+    }
+
+    function renderTable() {
+        const total = data.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        if (page > totalPages) page = totalPages;
+        const start = (page - 1) * pageSize;
+        const pageData = data.slice(start, start + pageSize);
+        recordCount.textContent = total;
+
+        if (pageData.length === 0) {
+            adminBody.innerHTML = '<tr><td colspan="7" class="badge-empty">暂无报名数据</td></tr>';
+        } else {
+            adminBody.innerHTML = pageData.map((r, i) => `
+                <tr>
+                    <td>${start + i + 1}</td>
+                    <td><strong>${r.name}</strong></td>
+                    <td>${r.organization}</td>
+                    <td>${r.email}</td>
+                    <td>${r.phone}</td>
+                    <td>${r.attendees}</td>
+                    <td>${r.time}</td>
+                </tr>
+            `).join('');
+        }
+        prevBtn.disabled = page === 1;
+        nextBtn.disabled = page === totalPages;
+        pageInfo.textContent = total === 0 ? '0 / 0' : `${page} / ${totalPages}`;
+    }
+
+    function showMsg(msg, type = 'success') {
+        feedback.className = `alert alert-${type}`;
+        feedback.innerHTML = msg;
+        feedback.classList.remove('hidden');
+        setTimeout(() => feedback.className = 'alert hidden', 4000);
+    }
+
+    // 报名提交
+    form.onsubmit = async function(e) {
+        e.preventDefault();
+        const name = document.getElementById('fullName').value.trim();
+        const org = document.getElementById('organization').value.trim();
+        const email = document.getElementById('email').value.trim();
+        const phone = document.getElementById('phone').value.trim();
+        const attendees = parseInt(document.getElementById('attendees').value) || 1;
+
+        if (!name || !org || !email || !phone) { showMsg('请完整填写所有字段', 'error'); return; }
+        if (!email.includes('@')) { showMsg('请输入正确邮箱', 'error'); return; }
+
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="loading-spinner"></span> 提交中...';
+
+        try {
+            const collection = await getCollection();
+            await collection.insertOne({
+                name,
+                organization: org,
+                email,
+                phone,
+                attendees,
+                time: new Date().toLocaleString('zh-CN')
+            });
+            showMsg('✅ 报名成功！感谢参与', 'success');
+            form.reset();
+            document.getElementById('attendees').value = 1;
+            await loadData();
+        } catch (e) {
+            console.error('❌ 提交失败:', e);
+            showMsg('❌ 报名失败，请检查网络后重试', 'error');
+        }
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> 立即报名';
+    };
+
+    // 后台管理
+    adminEntryBtn.onclick = function() {
+        if (adminPanel.classList.contains('visible')) {
+            adminPanel.classList.remove('visible');
+            this.innerHTML = '<i class="fas fa-lock"></i> 后台';
             return;
         }
+        modal.classList.remove('hidden');
+        pwdInput.value = '';
+        modalError.textContent = '';
+        pwdInput.focus();
+        modal.dataset.action = 'admin';
+    };
 
-        MongoClient = window.mongodb.MongoClient;
-        console.log('✅ MongoClient 已就绪');
-
-        // 主题切换
-        function setTheme(t) {
-            document.documentElement.setAttribute('data-theme', t);
-            localStorage.setItem('theme', t);
-            const dark = t === 'dark';
-            themeLabel.textContent = dark ? '亮白' : '暗黑';
-            themeToggle.querySelector('i').className = dark ? 'fas fa-sun' : 'fas fa-moon';
-        }
-        const savedTheme = localStorage.getItem('theme');
-        setTheme(savedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
-        themeToggle.onclick = () => setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
-
-        // 数据库操作
-        async function getCol() {
-            if (!client) {
-                statusText.textContent = '🔌 正在连接数据库...';
-                try {
-                    client = new MongoClient(CONNECTION_STRING);
-                    await client.connect();
-                    console.log('✅ 数据库已连接');
-                    statusText.textContent = '✅ 数据库已连接';
-                    statusDot.className = 'status-dot success';
-                } catch (e) {
-                    console.error('❌ 连接失败:', e);
-                    statusText.textContent = '❌ 连接失败: ' + e.message;
-                    statusDot.className = 'status-dot error';
-                    throw e;
-                }
-            }
-            return client.db('registration_db').collection('registrations');
-        }
-
-        // 加载数据
-        async function loadData() {
-            try {
-                const col = await getCol();
-                const docs = await col.find().sort({ time: -1 }).toArray();
-                data = docs.map(d => ({
-                    id: d._id.toString(),
-                    name: d.name || '',
-                    organization: d.organization || '',
-                    email: d.email || '',
-                    phone: d.phone || '',
-                    attendees: d.attendees || 1,
-                    time: d.time || ''
-                }));
-                renderTable();
-                console.log(`✅ 加载 ${data.length} 条数据`);
-            } catch (e) {
-                console.error('❌ 加载失败:', e);
-                alert('⚠️ 加载数据失败！请检查:\n1. 连接字符串中的用户名和密码是否正确\n2. MongoDB Atlas 的 IP 白名单是否允许所有IP (0.0.0.0/0)\n3. 网络连接是否正常');
-            }
-        }
-
-        function renderTable() {
-            const total = data.length;
-            const totalPages = Math.max(1, Math.ceil(total / pageSize));
-            if (page > totalPages) page = totalPages;
-            const start = (page - 1) * pageSize;
-            const pageData = data.slice(start, start + pageSize);
-            recordCount.textContent = total;
-
-            if (pageData.length === 0) {
-                adminBody.innerHTML = '<tr><td colspan="7" class="badge-empty">暂无报名数据</td></tr>';
-            } else {
-                adminBody.innerHTML = pageData.map((r, i) => `
-                    <tr>
-                        <td>${start + i + 1}</td>
-                        <td><strong>${r.name}</strong></td>
-                        <td>${r.organization}</td>
-                        <td>${r.email}</td>
-                        <td>${r.phone}</td>
-                        <td>${r.attendees}</td>
-                        <td>${r.time}</td>
-                    </tr>
-                `).join('');
-            }
-            prevBtn.disabled = page === 1;
-            nextBtn.disabled = page === totalPages;
-            pageInfo.textContent = total === 0 ? '0 / 0' : `${page} / ${totalPages}`;
-        }
-
-        function showMsg(msg, type = 'success') {
-            feedback.className = `alert alert-${type}`;
-            feedback.innerHTML = msg;
-            feedback.classList.remove('hidden');
-            setTimeout(() => feedback.className = 'alert hidden', 4000);
-        }
-
-        // 报名提交
-        form.onsubmit = async function(e) {
-            e.preventDefault();
-            const name = document.getElementById('fullName').value.trim();
-            const org = document.getElementById('organization').value.trim();
-            const email = document.getElementById('email').value.trim();
-            const phone = document.getElementById('phone').value.trim();
-            const attendees = parseInt(document.getElementById('attendees').value) || 1;
-
-            if (!name || !org || !email || !phone) { showMsg('请完整填写所有字段', 'error'); return; }
-            if (!email.includes('@')) { showMsg('请输入正确邮箱', 'error'); return; }
-
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '<span class="loading-spinner"></span> 提交中...';
-
-            try {
-                const col = await getCol();
-                await col.insertOne({
-                    name,
-                    organization: org,
-                    email,
-                    phone,
-                    attendees,
-                    time: new Date().toLocaleString('zh-CN')
-                });
-                showMsg('✅ 报名成功！感谢参与', 'success');
-                form.reset();
-                document.getElementById('attendees').value = 1;
+    async function verifyPwd(action) {
+        if (pwdInput.value.trim() === ADMIN_PASSWORD) {
+            modal.classList.add('hidden');
+            if (action === 'admin') {
+                adminPanel.classList.add('visible');
+                adminEntryBtn.innerHTML = '<i class="fas fa-lock-open"></i> 关闭后台';
                 await loadData();
-            } catch (e) {
-                console.error('❌ 提交失败:', e);
-                showMsg('❌ 报名失败，请检查网络后重试', 'error');
-            }
-            submitBtn.disabled = false;
-            submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> 立即报名';
-        };
-
-        // 后台管理
-        adminEntryBtn.onclick = function() {
-            if (adminPanel.classList.contains('visible')) {
-                adminPanel.classList.remove('visible');
-                this.innerHTML = '<i class="fas fa-lock"></i> 后台';
-                return;
-            }
-            modal.classList.remove('hidden');
-            pwdInput.value = '';
-            modalError.textContent = '';
-            pwdInput.focus();
-            modal.dataset.action = 'admin';
-        };
-
-        async function verifyPwd(action) {
-            if (pwdInput.value.trim() === ADMIN_PASSWORD) {
-                modal.classList.add('hidden');
-                if (action === 'admin') {
-                    adminPanel.classList.add('visible');
-                    adminEntryBtn.innerHTML = '<i class="fas fa-lock-open"></i> 关闭后台';
-                    await loadData();
-                } else if (action === 'reset') {
-                    if (data.length === 0) { alert('数据已空'); return; }
-                    if (confirm('⚠️ 确定清空所有数据？')) {
-                        try {
-                            const col = await getCol();
-                            await col.deleteMany({});
-                            await loadData();
-                            alert('✅ 已清空所有数据');
-                        } catch (e) {
-                            alert('❌ 清空失败: ' + e.message);
-                        }
+            } else if (action === 'reset') {
+                if (data.length === 0) { alert('数据已空'); return; }
+                if (confirm('⚠️ 确定清空所有数据？')) {
+                    try {
+                        const collection = await getCollection();
+                        await collection.deleteMany({});
+                        await loadData();
+                        alert('✅ 已清空所有数据');
+                    } catch (e) {
+                        alert('❌ 清空失败: ' + e.message);
                     }
                 }
-            } else {
-                modalError.textContent = '❌ 密码错误，请重试';
-                pwdInput.value = '';
-                pwdInput.focus();
             }
-        }
-
-        modalConfirm.onclick = () => verifyPwd(modal.dataset.action || 'admin');
-        modalCancel.onclick = () => modal.classList.add('hidden');
-        pwdInput.onkeydown = (e) => { if (e.key === 'Enter') modalConfirm.click(); if (e.key === 'Escape') modalCancel.click(); };
-
-        resetBtn.onclick = function() {
-            modal.classList.remove('hidden');
+        } else {
+            modalError.textContent = '❌ 密码错误，请重试';
             pwdInput.value = '';
-            modalError.textContent = '';
             pwdInput.focus();
-            modal.dataset.action = 'reset';
-        };
-
-        prevBtn.onclick = () => { if (page > 1) { page--; renderTable(); } };
-        nextBtn.onclick = () => { const total = Math.ceil(data.length / pageSize); if (page < total) { page++; renderTable(); } };
-
-        exportBtn.onclick = function() {
-            if (data.length === 0) { alert('无数据可导出'); return; }
-            const headers = ['姓名', '单位', '邮箱', '电话', '人数', '时间'];
-            const rows = data.map(r => [r.name, r.organization, r.email, r.phone, r.attendees, r.time]);
-            let csv = headers.join(',') + '\n' + rows.map(row => row.map(v => `"${v}"`).join(',')).join('\n');
-            const blob = new Blob(['\uFEFF' + csv], { type: 'application/vnd.ms-excel' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `报名数据_${new Date().toISOString().slice(0,10)}.xls`;
-            a.click();
-            URL.revokeObjectURL(a.href);
-        };
-
-        // 初始化加载数据
-        loadData();
+        }
     }
+
+    modalConfirm.onclick = () => verifyPwd(modal.dataset.action || 'admin');
+    modalCancel.onclick = () => modal.classList.add('hidden');
+    pwdInput.onkeydown = (e) => { if (e.key === 'Enter') modalConfirm.click(); if (e.key === 'Escape') modalCancel.click(); };
+
+    resetBtn.onclick = function() {
+        modal.classList.remove('hidden');
+        pwdInput.value = '';
+        modalError.textContent = '';
+        pwdInput.focus();
+        modal.dataset.action = 'reset';
+    };
+
+    prevBtn.onclick = () => { if (page > 1) { page--; renderTable(); } };
+    nextBtn.onclick = () => { const total = Math.ceil(data.length / pageSize); if (page < total) { page++; renderTable(); } };
+
+    exportBtn.onclick = function() {
+        if (data.length === 0) { alert('无数据可导出'); return; }
+        const headers = ['姓名', '单位', '邮箱', '电话', '人数', '时间'];
+        const rows = data.map(r => [r.name, r.organization, r.email, r.phone, r.attendees, r.time]);
+        let csv = headers.join(',') + '\n' + rows.map(row => row.map(v => `"${v}"`).join(',')).join('\n');
+        const blob = new Blob(['\uFEFF' + csv], { type: 'application/vnd.ms-excel' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `报名数据_${new Date().toISOString().slice(0,10)}.xls`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+    };
+
+    // ================================================================
+    // 🚀 启动
+    // ================================================================
+    statusText.textContent = '⏳ 正在初始化...';
+    statusDot.className = 'status-dot loading';
+    
+    // 先确保 Stitch 加载完成
+    checkStitch()
+        .then(() => {
+            console.log('✅ Stitch 就绪，初始化数据...');
+            return loadData();
+        })
+        .then(() => {
+            console.log('✅ 页面完全加载完成');
+        })
+        .catch(e => {
+            console.error('❌ 初始化失败:', e);
+            statusText.textContent = '❌ 初始化失败，请刷新重试';
+            statusDot.className = 'status-dot error';
+            alert('⚠️ 初始化失败！请刷新页面重试。\n如果持续失败，请检查网络连接。');
+        });
 </script>
 </body>
 </html>
