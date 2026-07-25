@@ -4,10 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes" />
     <title>活动报名 · 后台管理</title>
+    <!-- ✅ 修复：使用 unpkg 作为 MongoDB 驱动源 -->
     <script type="importmap">
         {
             "imports": {
-                "mongodb": "https://cdn.jsdelivr.net/npm/mongodb@6.5.0/dist/mongo-client.mjs"
+                "mongodb": "https://unpkg.com/mongodb@6.5.0/dist/mongo-client.mjs"
             }
         }
     </script>
@@ -70,7 +71,6 @@
         .hidden { display: none !important; }
         @media (max-width: 480px) { .app-header { flex-direction: column; align-items: stretch; gap: 0.6rem; border-radius: 32px; padding: 1rem 1.2rem; } .app-header h1 { font-size: 1.3rem; } .header-actions { justify-content: space-between; } .card { padding: 1.2rem 1rem 1.5rem; } .btn { font-size: 0.95rem; padding: 0.7rem 1.2rem; } .admin-tools .btn { font-size: 0.8rem; padding: 0.4rem 0.9rem; } .pagination { justify-content: center; } .password-modal { padding: 1.5rem 1.2rem; } }
         @media (min-width: 640px) { .container { max-width: 720px; } }
-        /* 加载状态 */
         .loading { opacity: 0.6; pointer-events: none; }
     </style>
 </head>
@@ -169,12 +169,15 @@
     console.log('📡 连接字符串前缀:', CONNECTION_STRING.substring(0, 30) + '...');
 
     // 引入 MongoDB 驱动
+    let MongoClient;
     try {
-        const { MongoClient } = await import('mongodb');
+        const module = await import('mongodb');
+        MongoClient = module.MongoClient;
         console.log('✅ MongoDB 驱动加载成功');
     } catch (err) {
         console.error('❌ MongoDB 驱动加载失败:', err);
         alert('MongoDB 驱动加载失败，请检查网络连接后刷新页面重试。');
+        throw err;
     }
 
     // DOM 引用
@@ -235,14 +238,12 @@
         console.log('🔌 正在连接数据库...');
         if (!cachedClient) {
             try {
-                const { MongoClient } = await import('mongodb');
                 cachedClient = new MongoClient(CONNECTION_STRING);
                 await cachedClient.connect();
                 console.log('✅ 数据库连接成功！');
             } catch (error) {
                 console.error('❌ 数据库连接失败:', error);
-                console.error('请检查: 1.连接字符串是否正确 2.网络是否通畅 3.IP白名单是否设置');
-                alert('⚠️ 数据库连接失败！\n请检查:\n1. 连接字符串中的用户名和密码是否正确\n2. MongoDB Atlas 的 IP 白名单是否允许所有IP (0.0.0.0/0)\n3. 网络连接是否正常\n\n详细错误请查看浏览器控制台 (F12)');
+                alert('⚠️ 数据库连接失败！请检查:\n1. 连接字符串中的用户名和密码是否正确\n2. MongoDB Atlas 的 IP 白名单是否允许所有IP (0.0.0.0/0)\n3. 网络连接是否正常');
                 throw error;
             }
         }
@@ -382,7 +383,6 @@
             return;
         }
 
-        // 禁用按钮，防止重复提交
         submitBtn.disabled = true;
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 提交中...';
 
