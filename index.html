@@ -4,14 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes" />
     <title>活动报名 · 后台管理</title>
-    <!-- ✅ 修复：使用 unpkg 作为 MongoDB 驱动源 -->
-    <script type="importmap">
-        {
-            "imports": {
-                "mongodb": "https://unpkg.com/mongodb@6.5.0/dist/mongo-client.mjs"
-            }
-        }
-    </script>
+    <!-- Font Awesome 6 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; transition: background-color 0.25s ease, color 0.2s, border-color 0.2s, box-shadow 0.2s; }
@@ -71,12 +64,10 @@
         .hidden { display: none !important; }
         @media (max-width: 480px) { .app-header { flex-direction: column; align-items: stretch; gap: 0.6rem; border-radius: 32px; padding: 1rem 1.2rem; } .app-header h1 { font-size: 1.3rem; } .header-actions { justify-content: space-between; } .card { padding: 1.2rem 1rem 1.5rem; } .btn { font-size: 0.95rem; padding: 0.7rem 1.2rem; } .admin-tools .btn { font-size: 0.8rem; padding: 0.4rem 0.9rem; } .pagination { justify-content: center; } .password-modal { padding: 1.5rem 1.2rem; } }
         @media (min-width: 640px) { .container { max-width: 720px; } }
-        .loading { opacity: 0.6; pointer-events: none; }
     </style>
 </head>
 <body>
 <div class="container">
-
     <header class="app-header">
         <h1><i class="fas fa-calendar-check" style="margin-right: 8px; -webkit-text-fill-color: var(--accent);"></i> XXX活动报名</h1>
         <div class="header-actions">
@@ -154,11 +145,19 @@
     </div>
 </div>
 
-<script type="module">
+<!-- ================================================================ -->
+<!-- ⭐ 使用传统 script 标签加载 MongoDB 驱动 (解决 CORS 问题) -->
+<!-- ================================================================ -->
+<script src="https://cdn.jsdelivr.net/npm/mongodb@5.9.2/dist/mongodb.umd.js">
+</script>
+
+<script>
     console.log('🚀 页面脚本开始加载...');
 
     // ================================================================
-    // ⚠️ 请修改下面这个连接字符串
+    // ⚠️ 请修改下面这个连接字符串（只需要改用户名和密码）
+    //    用户名: 在 MongoDB Atlas → Database Access 中查看
+    //    密码: 您创建数据库用户时设置的密码（不是Gmail密码！）
     // ================================================================
     const CONNECTION_STRING = "mongodb+srv://fengccn1fc_db_user:zzb@2001@cluster0.mongodb.net/?retryWrites=true&w=majority";
     const DB_NAME = "registration_db";
@@ -168,19 +167,26 @@
 
     console.log('📡 连接字符串前缀:', CONNECTION_STRING.substring(0, 30) + '...');
 
-    // 引入 MongoDB 驱动
-    let MongoClient;
-    try {
-        const module = await import('mongodb');
-        MongoClient = module.MongoClient;
-        console.log('✅ MongoDB 驱动加载成功');
-    } catch (err) {
-        console.error('❌ MongoDB 驱动加载失败:', err);
-        alert('MongoDB 驱动加载失败，请检查网络连接后刷新页面重试。');
-        throw err;
+    // 等待驱动加载完成
+    function waitForMongoDB() {
+        return new Promise((resolve) => {
+            if (window.mongodb && window.mongodb.MongoClient) {
+                console.log('✅ MongoDB 驱动已就绪');
+                resolve(window.mongodb.MongoClient);
+                return;
+            }
+            console.log('⏳ 等待 MongoDB 驱动加载...');
+            const checkInterval = setInterval(() => {
+                if (window.mongodb && window.mongodb.MongoClient) {
+                    clearInterval(checkInterval);
+                    console.log('✅ MongoDB 驱动加载完成');
+                    resolve(window.mongodb.MongoClient);
+                }
+            }, 100);
+        });
     }
 
-    // DOM 引用
+    // ----- DOM 引用 -----
     const form = document.getElementById('registrationForm');
     const feedback = document.getElementById('feedbackMessage');
     const adminPanel = document.getElementById('adminPanel');
@@ -206,6 +212,7 @@
     let currentPage = 1;
     const pageSize = 5;
     let cachedClient = null;
+    let MongoClient = null;
 
     console.log('✅ DOM 元素引用完成');
 
@@ -238,6 +245,9 @@
         console.log('🔌 正在连接数据库...');
         if (!cachedClient) {
             try {
+                if (!MongoClient) {
+                    MongoClient = await waitForMongoDB();
+                }
                 cachedClient = new MongoClient(CONNECTION_STRING);
                 await cachedClient.connect();
                 console.log('✅ 数据库连接成功！');
@@ -530,12 +540,25 @@
         openPasswordModal('reset');
     });
 
-    // ----- 启动 -----
-    console.log('🚀 页面初始化完成，开始加载数据...');
-    await loadData();
-    adminPanel.classList.remove('visible');
-    adminEntryBtn.innerHTML = '<i class="fas fa-lock"></i> 后台';
-    console.log('✅ 页面完全加载完成！');
+    // ================================================================
+    // 🚀 启动：等待驱动加载完成后初始化
+    // ================================================================
+    async function init() {
+        try {
+            MongoClient = await waitForMongoDB();
+            console.log('🚀 页面初始化完成，开始加载数据...');
+            await loadData();
+            adminPanel.classList.remove('visible');
+            adminEntryBtn.innerHTML = '<i class="fas fa-lock"></i> 后台';
+            console.log('✅ 页面完全加载完成！');
+        } catch (error) {
+            console.error('❌ 初始化失败:', error);
+            alert('初始化失败，请刷新页面重试。');
+        }
+    }
+
+    // 执行初始化
+    init();
 </script>
 </body>
 </html>
